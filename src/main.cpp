@@ -1,28 +1,25 @@
-//add Libs
 #include <Arduino.h>
-#include <SPI.h>
-#include <Wire.h>
-#include <LittleFS.h>
-#include <GyverOLED.h> //https://github.com/GyverLibs/GyverOLED
+#include <ESP8266WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPAsyncTCP.h>
-
-GyverOLED<SSD1306_128x32, OLED_NO_BUFFER> oled;
-//GyverOLED<SSD1306_128x32, OLED_BUFFER> oled;
+#include "LittleFS.h"
+#include <Wire.h>
+#include <GyverOLED.h>
 
 AsyncWebServer server(80);
-const char* PARAM_INPUT_1 = "ssid";
-const char* PARAM_INPUT_2 = "pass";
-const char* PARAM_INPUT_3 = "ip";
-const char* PARAM_INPUT_4 = "gateway";
-const char* PARAM_INPUT_5 = "subnet";
+GyverOLED<SSD1306_128x32, OLED_NO_BUFFER> oled;
+
+const char* PARAM_SSID = "ssid";
+const char* PARAM_PASS = "pass";
+const char* PARAM_IP = "ip";
+const char* PARAM_GATEWAY = "gateway";
+const char* PARAM_SUBNET = "subnet";
 
 String ssid;
 String pass;
 String ip;
 String gateway;
 String subnet;
-
 
 const char* ssidPath = "/ssid.txt";
 const char* passPath = "/pass.txt";
@@ -36,33 +33,37 @@ IPAddress localSubnet;
 
 unsigned long previousMillis = 0;
 const long interval = 10000;
+boolean restart = false;
 
-
-
-void initLittleFS(){
-
-if (!LittleFS.begin()) {
-  oled.clear();
-  oled.print("Error mount LittleFS");
+void initFS()
+{
+  if (!LittleFS.begin())
+  {
+    Serial.println("Error mount LittleFS");
   }
-oled.clear();
-oled.print("LittleFS mounted");
+  else
+  {
+    Serial.println("LittleFS mounted");
+  }
 }
 
-String readFile(fs::FS &fs, const char * path){
+String readFile(fs::FS &fs, const char* path)
+{
   Serial.printf("Reading file: %s\r\n", path);
-
   File file = fs.open(path, "r");
-  if(!file || file.isDirectory()){
+  if(!file || file.isDirectory())
+  {
     Serial.println("- failed to open file for reading");
     return String();
   }
-  
+
   String fileContent;
-  while(file.available()){
+  while(file.available())
+  {
     fileContent = file.readStringUntil('\n');
-    break;     
+    break;
   }
+  file.close();
   return fileContent;
 }
 
@@ -77,20 +78,10 @@ void writeFile(fs::FS &fs, const char * path, const char * message){
   if(file.print(message)){
     Serial.println("- file written");
   } else {
-    Serial.println("- write failed");
+    Serial.println("- frite failed");
   }
+  file.close();
 }
-
-/*void setup() {
-  oled.init();
-  oled.home();
-  oled.autoPrintln(true);
-  oled.clear();
-  oled.println("Инициализация дисплея");
-  }
-
-void loop() {
-*/
 
 bool initWiFi() {
   if(ssid=="" || ip==""){
@@ -101,24 +92,19 @@ bool initWiFi() {
   WiFi.mode(WIFI_STA);
   localIP.fromString(ip.c_str());
   localGateway.fromString(gateway.c_str());
-
+  localSubnet.fromString(subnet.c_str());
 
   if (!WiFi.config(localIP, localGateway, localSubnet)){
     Serial.println("STA Failed to configure");
     return false;
   }
   WiFi.begin(ssid.c_str(), pass.c_str());
+
   Serial.println("Connecting to WiFi...");
-
-  unsigned long currentMillis = millis();
-  previousMillis = currentMillis;
-
-  while(WiFi.status() != WL_CONNECTED) {
-    currentMillis = millis();
-    if (currentMillis - previousMillis >= interval) {
-      Serial.println("Failed to connect.");
-      return false;
-    }
+  delay(20000);
+  if(WiFi.status() != WL_CONNECTED) {
+    Serial.println("Failed to connect.");
+    return false;
   }
 
   Serial.println(WiFi.localIP());
@@ -126,37 +112,56 @@ bool initWiFi() {
 }
 
 void setup() {
+  oled.init();
+  oled.setScale(1);
+  oled.home();
+  oled.isEnd();
+  oled.clear();
   // Serial port for debugging purposes
   Serial.begin(115200);
 
-  initLittleFS();
-
-
-  
-  // Load values saved in LittleFS
+  initFS();
+  //Load values saved in LittleFS
   ssid = readFile(LittleFS, ssidPath);
   pass = readFile(LittleFS, passPath);
   ip = readFile(LittleFS, ipPath);
   gateway = readFile (LittleFS, gatewayPath);
   subnet = readFile (LittleFS, subnetPath);
   Serial.println(ssid);
+  oled.print(ssid);
   Serial.println(pass);
   Serial.println(ip);
+  oled.setCursor(0, 1);
+  oled.print(ip);
   Serial.println(gateway);
-
-
-    // Route to set GPIO state to LOW
+  oled.setCursor(0, 2);
+  oled.print(gateway);
+  Serial.println(subnet);
+  oled.setCursor(0, 3);
+  oled.print(subnet);
+  if(initWiFi()) {
+    // Route for root / web page
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(LittleFS, "/index.html", "text/html", false);
+    });
+        server.serveStatic("/", LittleFS, "/");
+    // Route to set GPIO state to HIGH
     server.begin();
-  }
-  else {
+     }
+    else {
+    // Connect to Wi-Fi network with SSID and password
+    Serial.println("Setting AP (Access Point)");
+    oled.clear();
+    oled.println("Setting AP (Access Point)");
+    // NULL sets an open Access Point
     WiFi.softAP("ESP-WIFI-MANAGER", NULL);
 
     IPAddress IP = WiFi.softAPIP();
     Serial.print("AP IP address: ");
-    Serial.println(IP);
+    Serial.println(IP); 
 
-
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Web Server Root URL
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
       request->send(LittleFS, "/wifimanager.html", "text/html");
     });
     
@@ -168,48 +173,69 @@ void setup() {
         AsyncWebParameter* p = request->getParam(i);
         if(p->isPost()){
           // HTTP POST ssid value
-          if (p->name() == PARAM_INPUT_1) {
+          if (p->name() == PARAM_SSID) {
             ssid = p->value().c_str();
             Serial.print("SSID set to: ");
+            oled.clear();
+            oled.setCursor(0, 0);
+            oled.print("SSID set to: ");
             Serial.println(ssid);
+            oled.setCursor(0, 1);
+            oled.print(ssid);
             // Write file to save value
             writeFile(LittleFS, ssidPath, ssid.c_str());
           }
           // HTTP POST pass value
-          if (p->name() == PARAM_INPUT_2) {
+          if (p->name() == PARAM_PASS) {
             pass = p->value().c_str();
             Serial.print("Password set to: ");
             Serial.println(pass);
+            oled.setCursor(0, 2);
+            oled.print("Password set to: ");
+            oled.setCursor(0, 3);
+            oled.print(pass);
+
             // Write file to save value
             writeFile(LittleFS, passPath, pass.c_str());
           }
           // HTTP POST ip value
-          if (p->name() == PARAM_INPUT_3) {
+          if (p->name() == PARAM_IP) {
             ip = p->value().c_str();
             Serial.print("IP Address set to: ");
             Serial.println(ip);
+            oled.setCursor(0, 4);
+            oled.print(ip);
             // Write file to save value
             writeFile(LittleFS, ipPath, ip.c_str());
           }
           // HTTP POST gateway value
-          if (p->name() == PARAM_INPUT_4) {
+          if (p->name() == PARAM_GATEWAY) {
             gateway = p->value().c_str();
             Serial.print("Gateway set to: ");
             Serial.println(gateway);
             // Write file to save value
             writeFile(LittleFS, gatewayPath, gateway.c_str());
           }
+          if (p->name() == PARAM_SUBNET) {
+            subnet = p->value().c_str();
+            Serial.print("Subnet set to: ");
+            Serial.println(subnet);
+            // Write file to save value
+            writeFile(LittleFS, subnetPath, subnet.c_str());
+          }
           //Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
         }
       }
+      restart = true;
       request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
-      delay(3000);
-      ESP.restart();
     });
     server.begin();
   }
-
-void loop() {
-
 }
 
+void loop() {
+  if (restart){
+    delay(5000);
+    ESP.restart();
+  }
+}
