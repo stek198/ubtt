@@ -5,8 +5,11 @@
 #include "LittleFS.h"
 #include <Wire.h>
 #include <GyverOLED.h>
+#include <WebSerial.h>
+
 
 AsyncWebServer server(80);
+
 GyverOLED<SSD1306_128x32, OLED_NO_BUFFER> oled;
 
 const char* PARAM_SSID = "ssid";
@@ -14,18 +17,20 @@ const char* PARAM_PASS = "pass";
 const char* PARAM_IP = "ip";
 const char* PARAM_GATEWAY = "gateway";
 const char* PARAM_SUBNET = "subnet";
+const char* ssidPath = "/ssid.txt";
+const char* passPath = "/pass.txt";
+const char* ipPath = "/ip.txt";
+const char* gatewayPath = "/gateway.txt";
+const char* subnetPath = "/subnet.txt";
+const int PARAM_PORT = 8765;
+
+#define bufferSize 8192
 
 String ssid;
 String pass;
 String ip;
 String gateway;
 String subnet;
-
-const char* ssidPath = "/ssid.txt";
-const char* passPath = "/pass.txt";
-const char* ipPath = "/ip.txt";
-const char* gatewayPath = "/gateway.txt";
-const char* subnetPath = "/subnet.txt";
 
 IPAddress localIP;
 IPAddress localGateway;
@@ -34,6 +39,25 @@ IPAddress localSubnet;
 unsigned long previousMillis = 0;
 const long interval = 10000;
 boolean restart = false;
+
+WiFiServer TCP_SERVER(PARAM_PORT);
+WiFiClient Client;
+
+uint8_t buf1[bufferSize];
+uint16_t i1=0;
+
+uint8_t buf2[bufferSize];
+uint16_t i2=0;
+
+
+void recvMsg(uint8_t *data, size_t len){
+  WebSerial.println("Received Data...");
+  String d = "";
+  for(int i=0; i < len; i++){
+    d += char(data[i]);
+  }
+  WebSerial.println(d);
+}
 
 void initFS()
 {
@@ -117,6 +141,10 @@ void setup() {
   oled.home();
   oled.isEnd();
   oled.clear();
+  oled.print("Strarting");
+  delay(5000);
+  oled.clear();
+
   // Serial port for debugging purposes
   Serial.begin(115200);
 
@@ -140,26 +168,32 @@ void setup() {
   oled.setCursor(0, 3);
   oled.print(subnet);
   if(initWiFi()) {
-    // Route for root / web page
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(LittleFS, "/index.html", "text/html", false);
+    WebSerial.begin(&server);
+    /* Attach Message Callback */
+    WebSerial.msgCallback(recvMsg);
+     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+      request->send(LittleFS, "/webserial.html", "text/html");
     });
         server.serveStatic("/", LittleFS, "/");
-    // Route to set GPIO state to HIGH
     server.begin();
      }
     else {
     // Connect to Wi-Fi network with SSID and password
     Serial.println("Setting AP (Access Point)");
     oled.clear();
-    oled.println("Setting AP (Access Point)");
+    oled.home();
+    oled.println("Setting AP");;
     // NULL sets an open Access Point
     WiFi.softAP("ESP-WIFI-MANAGER", NULL);
 
     IPAddress IP = WiFi.softAPIP();
+    Serial.println("Starting TCP Server");
+    server.begin(); // start TCP server
     Serial.print("AP IP address: ");
     Serial.println(IP); 
-
+    oled.clear();
+    oled.home();
+    oled.println(IP);
     // Web Server Root URL
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
       request->send(LittleFS, "/wifimanager.html", "text/html");
@@ -223,7 +257,7 @@ void setup() {
             // Write file to save value
             writeFile(LittleFS, subnetPath, subnet.c_str());
           }
-          //Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
+
         }
       }
       restart = true;
